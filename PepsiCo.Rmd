@@ -1,0 +1,807 @@
+---
+title: "PepsiCo"
+author: "Arjun Bayadegere Prabhanna"
+date: "2024-07-27"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r}
+# Uncomment the below code to first install the packages
+#install.packages("forecast")
+#install.packages("ggplot")
+#install.packages("fma")
+#install.packages("tseries")
+#install.packages("dplyr")
+#install.packages("reshape2")
+#install.packages("xgboost")
+#install.packages("e1071")
+```
+
+```{r}
+# Loading necessary packages
+library(forecast)
+library(fma)
+library(ggplot2)
+library(tseries)
+library(corrplot)
+library(quantmod)
+library(dplyr)
+library(reshape2)
+library(lubridate)
+library(xgboost)
+library(Metrics)
+library(e1071)
+library(keras)
+library(tidyr)
+```
+# Data Loading
+
+```{r}
+# Loading the file path
+file_path <- "~/Downloads/PEP.csv"
+pepsico_df <- read.csv(file_path)
+```
+
+# Data Preprocessing
+
+```{r}
+# Data Sorting
+# Converting Date column to Date format
+pepsico_df$Date <- as.Date(pepsico_df$Date)
+
+# Extracting year from Date
+pepsico_df$Year <- format(pepsico_df$Date, "%Y")
+
+# Sorting data before splitting
+pepsico_df <- pepsico_df[order(pepsico_df$Date), ]
+```
+
+```{r}
+# Data Splitting
+split_ratio <- 0.8
+split_index <- floor(nrow(pepsico_df) * split_ratio)
+
+# Training Data
+pep_train <- pepsico_df[1:split_index, ]
+
+# Testing Data
+pep_test <- pepsico_df[(split_index+1) : nrow(pepsico_df), ]
+```
+
+```{r}
+# Extracting the train and test dates from pepsico datset
+
+# For Training Data
+train_start_date <- min(pep_train$Date)
+train_end_date <- max(pep_train$Date)
+
+train_start_month_year <- format(train_start_date, "%B %Y")
+train_end_month_year <- format(train_end_date, "%B %Y")
+
+# For Testing Data
+test_start_date <- min(pep_test$Date)
+test_end_date <- max(pep_test$Date)
+
+test_start_month_year <- format(test_start_date, "%B %Y")
+test_end_month_year <- format(test_end_date, "%B %Y")
+
+# Printing the results
+cat("Training dataset spans from", train_start_month_year, "to", train_end_month_year, "\n")
+cat("Testing dataset spans from", test_start_month_year, "to", test_end_month_year, "\n")
+```
+
+```{r}
+# Printing the total outcomes 
+print(nrow(pep_train))
+print(nrow(pep_test))
+```
+
+```{r}
+# Checking for any NAN or missing values
+pep_train_missing <- sum(colSums(is.na(pep_train)))
+print(pep_train_missing)
+
+pep_test_missing <- sum(colSums((is.na(pep_test))))
+print(pep_test_missing)
+```
+
+```{r}
+# Converting the datasets into time series format, weekly 
+pep_train_ts <- ts(pep_train$Close, frequency = 52)
+pep_test_ts <- ts(pep_test$Close, frequency = 52)
+```
+
+```{r}
+# Dataset Overview
+print("----------Summary Statistics--------")
+summary(pepsico_df)
+
+print("----------Dataset Structure---------")
+str(pepsico_df)
+```
+# Exploratory Data Analysis
+
+```{r}
+# Exploratory Data Analysis(EDA)
+# Feature Relationships using various plots
+
+# ScatterPlot
+# Color points based on 'Volume' with a gradient
+ggplot(pepsico_df, aes(x = Volume, y = Close, color = Volume)) +
+  geom_point() +
+  ggtitle("Volume vs Closing Price with Volume Gradient") +
+  scale_color_gradient(low = "blue", high = "red")  
+```
+
+```{r}
+# BarPlot
+ggplot(pepsico_df, aes(x = Date, y = Volume)) +
+  geom_bar(stat = "identity", fill = "blue") +
+  ggtitle("Trading Volume Over Time") +
+  xlab("Date") +
+  ylab("Volume") 
+```
+
+```{r}
+# TimeSeriesPlot
+ggplot(pepsico_df, aes(x = Date, y = Close)) + geom_line() + 
+  ggtitle("Closing Price Over Time") + 
+  xlab("Date") + 
+  ylab("Close Price")
+```
+```{r}
+# CandleStick Plot
+pepsico_xts <- xts(pepsico_df[, c("Open", "High", "Low", "Close")], order.by = pepsico_df$Date)
+chart_Series(pepsico_xts, name = "Candlestick Chart of Pepsi Stock", TA = NULL)
+```
+
+```{r}
+# Calculating daily returns using time series plot
+pepsico_df <- pepsico_df %>%
+  arrange(Date) %>%
+  mutate(Returns = (Close / lag(Close) - 1) * 100)
+
+# Ploting daily returns
+ggplot(pepsico_df, aes(x = Date, y = Returns)) +
+  geom_line(color = "black") +
+  ggtitle("Daily Returns of Pepsi Stock") +
+  xlab("Date") +
+  ylab("Daily Returns (%)")
+```
+
+```{r}
+# Seting a balanced aspect ratio
+par(pin = c(6, 4))  
+par(mar = c(5, 4, 4, 2) + 0.1)  
+
+# Plotting histogram of daily returns
+hist(pepsico_df$Returns,
+     main = "Histogram of Daily Returns of PepsiCo Stock",
+     xlab = "Daily Returns (%)",
+     ylab = "Frequency",
+     ylim = c(0, 0.5),  # Set y-axis limits based on your data
+     labels = TRUE,      # Display frequency numbers on top of bars
+     prob = TRUE,        # Use % frequencies rather than raw counts
+     col = "blue")   # Set color of bar borders
+
+# Adding a density line to the histogram
+lines(density(pepsico_df$Returns, na.rm = TRUE), 
+      lwd = 2,          # Set line width
+      col = "red")      
+```
+
+```{r}
+# Calculating rolling volatility (e.g., 30-day rolling standard deviation of returns)
+pepsico_df <- pepsico_df %>%
+  arrange(Date) %>%
+  mutate(Returns = (Close / lag(Close) - 1) * 100,
+         RollingVolatility = zoo::rollapply(Returns, width = 30, FUN = sd, fill = NA, align = "right"))
+
+# Plotting rolling volatility
+ggplot(pepsico_df, aes(x = Date, y = RollingVolatility)) +
+  geom_line(color = "black") +
+  ggtitle("Rolling Volatility of Pepsi Stock") +
+  xlab("Date") +
+  ylab("30-Day Rolling Volatility (%)")
+```
+
+```{r}
+# Plotting Close and Adjusted Close prices
+ggplot(pepsico_df, aes(x = Date)) +
+  geom_line(aes(y = Close, color = "Close Price")) +
+  geom_line(aes(y = Adj.Close, color = "Adjusted Close Price")) +
+  labs(title = "PepsiCo Stock Prices",
+       x = "Date",
+       y = "Price",
+       color = "Legend") +
+  theme_minimal() +
+  scale_color_manual(values = c("Close Price" = "blue", "Adjusted Close Price" = "red"))
+```
+
+
+```{r}
+# Computing correlation matrix
+cor_matrix <- cor(pepsico_df[, sapply(pepsico_df, is.numeric)], use = "complete.obs")
+print(cor_matrix)
+
+# Correlation matrix for ggplot
+cor_melt <- melt(cor_matrix)
+
+# Heatmap of correlations
+ggplot(cor_melt, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0) +
+  ggtitle("Heatmap of Correlations") +
+  xlab("Variable") +
+  ylab("Variable")
+```
+# Analysis of Time Series
+
+```{r}
+# Aggregating the data by week (This groups all data points within the same week together by taking mean)
+pep_decomp_weekly <- aggregate(pep_train$Close,
+                               by = list(week = format(pep_train$Date, "%Y-%U")),
+                               FUN = mean)
+
+# Ensuring the data is in a vector form and specify the start time correctly
+pep_train_ts_aggregated <- ts(pep_decomp_weekly$x, frequency = 52, start = c(as.numeric(format(min(pep_train$Date), "%Y")),
+                                                                        as.numeric(format(min(pep_train$Date),"%U"))))
+
+# Aggregating the test data by week (This groups all data points within the same week together by taking mean)
+pep_test_weekly <- aggregate(pep_test$Close,
+                             by = list(week = format(pep_test$Date, "%Y-%U")),
+                             FUN = mean)
+
+# Ensuring the aggregated data is in a time series format
+pep_test_ts_aggregated <- ts(pep_test_weekly$x, frequency = 52, 
+                             start = c(as.numeric(format(min(pep_test$Date), "%Y")),
+                                       as.numeric(format(min(pep_test$Date), "%U"))))
+```
+
+```{r}
+# Visualising the aggregated time series data
+pep_decomp_aggregated <- decompose(pep_train_ts_aggregated)
+par(mar = c(8, 5, 4, 2) + 0.1)
+plot(pep_decomp_aggregated)
+```
+```{r}
+# Visualising the training time series data(without aggregation)
+pep_decomp <- decompose(pep_train_ts)
+par(mar = c(8, 5, 4, 2) + 0.1)
+plot(pep_decomp)
+```
+
+```{r}
+# Converting the time series to a data frame for ggplot
+decomposed_df <- data.frame(
+  Date = pep_train$Date[1:length(pep_decomp$trend)],
+  Trend = pep_decomp$trend,
+  Seasonal = pep_decomp$seasonal,
+  Random = pep_decomp$random)
+
+# Plotting Trend Component
+ggplot(decomposed_df, aes(x = Date, y = Trend)) +
+  geom_line() +
+  ggtitle("Trend Component") +
+  xlab("Date") +
+  ylab("Trend")
+
+# Plotting Seasonal Component
+ggplot(decomposed_df, aes(x = Date, y = Seasonal)) +
+  geom_line() +
+  ggtitle("Seasonal Component") +
+  xlab("Date") +
+  ylab("Seasonal")
+
+# Plotting Random Component
+ggplot(decomposed_df, aes(x = Date, y = Random)) +
+  geom_line() +
+  ggtitle("Random Component") +
+  xlab("Date") +
+  ylab("Random")
+```
+
+```{r}
+# Checking the residuals
+checkresiduals(decomposed_df$Random)
+checkresiduals(pep_decomp_aggregated$random)
+```
+```{r}
+# Removing trend and seasonality
+# Seasonal differencing
+seasonal_diff <- diff(pep_train_ts_aggregated, lag = 52)
+
+# Regular differencing on the seasonally differenced series
+trend_seasonal_diff <- diff(seasonal_diff, differences = 1)
+par(mar = c(8, 5, 4, 2) + 0.1)
+plot(decompose(trend_seasonal_diff))
+```
+
+```{r}
+# Checking residuals of the differenced time series
+checkresiduals(trend_seasonal_diff)
+```
+
+```{r, warning=FALSE}
+# Variance stabilisation
+lambda <- BoxCox.lambda(trend_seasonal_diff)
+pep_train_transform <- BoxCox(trend_seasonal_diff,lambda)
+```
+
+```{r}
+# Counting the number of observations in ts plot
+num_observations <- length(pep_train_ts_aggregated)
+print(num_observations)
+```
+
+```{r}
+# Examining ACF/PACF plots
+# Checking for patterns and auto correlations
+acf_result <- acf(trend_seasonal_diff, main = "ACF Plot", lag.max = 50)
+pacf_result <- pacf(trend_seasonal_diff, main = "PACF Plot", lag.max = 50)
+```
+# Model Fitting
+
+```{r, warning=FALSE}
+# Model Fitting
+# Auto Regressive(AR) model
+ar_model <- Arima(pep_train_transform, order = c(1,0,0))
+
+# Moving Average(MA) model
+ma_model <- Arima(pep_train_transform, order = c(0,0,2))
+
+# ARMA model
+arma_model <- Arima(pep_train_transform, order = c(1,0,2))
+
+# Auto-ARIMA model
+arima_model <- auto.arima(pep_train_ts_aggregated, trace = FALSE, 
+                          approximation = FALSE, 
+                          stepwise = FALSE, seasonal = FALSE)
+
+# SARIMA model
+sarima_model <- auto.arima(pep_train_transform, seasonal = TRUE, 
+                           stepwise = FALSE, approximation = FALSE)
+
+# ETS model
+ets_model <- ets(pep_train_transform)
+
+# TBATS model
+tbats_model <- tbats(pep_train_transform)
+
+# Local linear trend model with automatic selection for error, trend, and seasonality
+local_trend_model <- ets(pep_train_transform, model = "ZZZ")
+```
+
+```{r}
+# Printing the results
+print(ar_model)
+print(ma_model)
+print(arma_model)
+print(arima_model)
+print(sarima_model)
+print(ets_model)
+print(tbats_model)
+print(local_trend_model)
+```
+
+# Diagnostic Tests
+
+```{r}
+# Checking Residuals of the best fit model
+checkresiduals(arima_model)
+checkresiduals(arma_model)
+```
+
+```{r}
+# ACF/PACF of residuals
+acf(residuals(arima_model), main = "ACF of Residuals")
+pacf(residuals(arima_model), main = "PACF of Residuals")
+```
+
+```{r, warning=FALSE}
+# Hypothesis Testing
+adf_test_1 <- adf.test(arima_model$residuals, alternative = "stationary")
+print(adf_test_1)
+```
+```{r}
+# Checking for any auto-correlations
+lb_test_1 <- Box.test(arima_model$residuals, lag = 50, type = "Ljung-Box")
+print(lb_test_1)
+```
+# USING ENSEMBLE METHOD AND CHECKING THEIR FORECASTS
+```{r}
+# Forecast using your ARIMA model
+forecast_result <- forecast(arima_model, h = length(pep_test_ts_aggregated))
+
+# Creating a data frame for the forecast and actual values
+forecast_df <- data.frame(
+  Date = time(forecast_result$mean),
+  Forecast = as.numeric(forecast_result$mean),
+  Lower = as.numeric(forecast_result$lower[,2]),  # 95% CI
+  Upper = as.numeric(forecast_result$upper[,2])   # 95% CI
+)
+
+# Actual values for comparison
+actual_df <- data.frame(
+  Date = time(pep_test_ts_aggregated),
+  Actual = as.numeric(pep_test_ts_aggregated)
+)
+
+# Combining the data frames for plotting
+plot_data <- merge(forecast_df, actual_df, by = "Date", all = TRUE)
+
+# Plotting using ggplot2
+ggplot(plot_data, aes(x = Date)) +
+  geom_line(aes(y = Forecast, color = "Forecast")) +
+  geom_ribbon(aes(ymin = Lower, ymax = Upper), alpha = 0.2, fill = "blue") +
+  geom_line(aes(y = Actual, color = "Actual")) +
+  ggtitle("ARIMA Model Forecast vs Actual Data") +
+  xlab("Date") +
+  ylab("Close Price") +
+  scale_color_manual(values = c("Forecast" = "blue", "Actual" = "red")) +
+  theme_minimal()
+```
+
+
+```{r}
+# Ensemble method in Time Series
+# 1) Combining Forecasts (Simple Average)
+
+# Number of future periods to forecast (e.g., 2 years = 104 weeks)
+future_periods <- 104
+
+# Generating forecasts for future periods from each model
+forecast_ar_future <- forecast(ar_model, h = future_periods)
+forecast_ma_future <- forecast(ma_model, h = future_periods)
+forecast_arma_future <- forecast(arma_model, h = future_periods)
+forecast_arima_future <- forecast(arima_model, h = future_periods)
+forecast_sarima_future <- forecast(sarima_model, h = future_periods)
+forecast_ets_future <- forecast(ets_model, h = future_periods)
+forecast_tbats_future <- forecast(tbats_model, h = future_periods)
+forecast_local_trend_future <- forecast(local_trend_model, h = future_periods)
+
+# Extracting the forecast values
+forecasts_future <- data.frame(
+  ar = forecast_ar_future$mean,
+  ma = forecast_ma_future$mean,
+  arma = forecast_arma_future$mean,
+  arima = forecast_arima_future$mean,
+  sarima = forecast_sarima_future$mean,
+  ets = forecast_ets_future$mean,
+  tbats = forecast_tbats_future$mean,
+  local_trend = forecast_local_trend_future$mean
+)
+
+# Combining the forecasts using simple average
+forecasts_future$average <- rowMeans(forecasts_future)
+
+# Creating a date range for the future periods
+last_date <- max(pepsico_df$Date)
+future_dates <- seq.Date(from = last_date + weeks(1), by = "week", length.out = future_periods)
+
+# Adding the date column to the forecast data
+future_forecasts_df <- data.frame(
+  Date = future_dates,
+  ar = forecasts_future$ar,
+  ma = forecasts_future$ma,
+  arma = forecasts_future$arma,
+  arima = forecasts_future$arima,
+  sarima = forecasts_future$sarima,
+  ets = forecasts_future$ets,
+  tbats = forecasts_future$tbats,
+  local_trend = forecasts_future$local_trend,
+  average = forecasts_future$average
+)
+
+ggplot(future_forecasts_df, aes(x = Date)) +
+  geom_line(aes(y = average, color = "Average Forecast")) +
+  geom_line(aes(y = ar, color = "AR Forecast")) +
+  geom_line(aes(y = ma, color = "MA Forecast")) +
+  geom_line(aes(y = arma, color = "ARMA Forecast")) +
+  geom_line(aes(y = arima, color = "ARIMA Forecast")) +
+  geom_line(aes(y = sarima, color = "SARIMA Forecast")) +
+  geom_line(aes(y = ets, color = "ETS Forecast")) +
+  geom_line(aes(y = tbats, color = "TBATS Forecast")) +
+  geom_line(aes(y = local_trend, color = "Local Trend Forecast")) +
+  ggtitle("Future Forecasts for Pepsi Stock Price") +
+  xlab("Date") +
+  ylab("Forecasted Close Price") +
+  scale_color_manual(values = c("Average Forecast" = "blue",
+                                "AR Forecast" = "red",
+                                "MA Forecast" = "green",
+                                "ARMA Forecast" = "purple",
+                                "ARIMA Forecast" = "orange",
+                                "SARIMA Forecast" = "darkred",
+                                "ETS Forecast" = "cyan",
+                                "TBATS Forecast" = "magenta",
+                                "Local Trend Forecast" = "black")) +
+  scale_x_date(date_labels = "%Y-%m", date_breaks = "6 months") + 
+  theme_minimal()
+```
+```{r}
+# 2) Stacking
+# Generating forecasts for future periods from each model
+forecast_ar_future <- forecast(ar_model, h = future_periods)
+forecast_ma_future <- forecast(ma_model, h = future_periods)
+forecast_arma_future <- forecast(arma_model, h = future_periods)
+forecast_arima_future <- forecast(arima_model, h = future_periods)
+forecast_sarima_future <- forecast(sarima_model, h = future_periods)
+forecast_ets_future <- forecast(ets_model, h = future_periods)
+forecast_tbats_future <- forecast(tbats_model, h = future_periods)
+forecast_local_trend_future <- forecast(local_trend_model, h = future_periods)
+
+# Combining forecasts into a data frame for stacking
+future_forecasts_df <- data.frame(
+  ar = forecast_ar_future$mean,
+  ma = forecast_ma_future$mean,
+  arma = forecast_arma_future$mean,
+  arima = forecast_arima_future$mean,
+  sarima = forecast_sarima_future$mean,
+  ets = forecast_ets_future$mean,
+  tbats = forecast_tbats_future$mean,
+  local_trend = forecast_local_trend_future$mean
+)
+
+# Preparing data for xgboost
+X_future <- as.matrix(future_forecasts_df)
+dtrain_future <- xgb.DMatrix(data = X_future)
+
+# Predicting future values using the xgboost model
+future_stacking_forecast <- predict(xgb_model, newdata = dtrain_future)
+
+# Creating a date range for the future periods
+last_date <- max(pepsico_df$Date)
+future_dates <- seq.Date(from = last_date + weeks(1), by = "week", length.out = future_periods)
+
+# Combining future forecasts with future dates
+future_forecasts_df <- data.frame(
+  Date = future_dates,
+  Stacking_Forecast = future_stacking_forecast
+)
+
+# Preparing historical data for plotting
+historical_dates <- as.Date(pepsico_df$Date[(split_index + 1):nrow(pepsico_df)])
+historical_actual_df <- data.frame(
+  Date = historical_dates,
+  Actual = as.numeric(pep_test_ts)
+)
+
+# Plotting the results with customized x-axis
+ggplot() +
+  geom_line(data = historical_actual_df, aes(x = Date, y = Actual, color = "Actual")) +
+  geom_line(data = future_forecasts_df, aes(x = Date, y = Stacking_Forecast, color = "Future Stacking Forecast")) +
+  ggtitle("Actual Data vs Future Stacking Forecast") +
+  xlab("Date") +
+  ylab("Forecasted Close Price") +
+  scale_color_manual(values = c("Actual" = "black", "Future Stacking Forecast" = "red")) +
+  scale_x_date(date_labels = "%Y-%m", date_breaks = "6 months") + 
+  theme_minimal()
+```
+```{r}
+# Combining forecasts into a data frame for SVM
+svm_data <- data.frame(
+  ar = forecast_ar$mean,
+  ma = forecast_ma$mean,
+  arma = forecast_arma$mean,
+  ets = forecast_ets$mean,
+  tbats = forecast_tbats$mean,
+  local_trend = forecast_local_trend$mean,
+  Actual = as.numeric(pep_test_ts_aggregated)
+)
+
+# SVM model training
+svm_model <- svm(Actual ~ ., data = svm_data, type = "eps-regression")
+
+# Prediction using SVM for historical data
+svm_forecast <- predict(svm_model, newdata = svm_data)
+
+# Combining the forecasts for future periods into a data frame for SVM
+future_svm_data <- data.frame(
+  ar = forecasts_future$ar,
+  ma = forecasts_future$ma,
+  arma = forecasts_future$arma,
+  ets = forecasts_future$ets,
+  tbats = forecasts_future$tbats,
+  local_trend = forecasts_future$local_trend
+)
+
+# Predicting the future values using SVM
+future_svm_forecast <- predict(svm_model, newdata = future_svm_data)
+
+# Creating a date range for the future periods
+last_date <- max(pepsico_df$Date)
+future_dates <- seq.Date(from = last_date + weeks(1), by = "week", length.out = future_periods)
+
+# Combining the future forecasts with future dates
+future_forecasts_df <- data.frame(
+  Date = future_dates,
+  SVM_Forecast = future_svm_forecast
+)
+
+# Preparing the historical data for plotting
+historical_dates <- as.Date(pepsico_df$Date[(split_index + 1):nrow(pepsico_df)])
+historical_actual_df <- data.frame(
+  Date = historical_dates,
+  Actual = as.numeric(pep_test_ts)
+)
+
+# Ploting the results with customized x-axis
+ggplot() +
+  geom_line(data = historical_actual_df, aes(x = Date, y = Actual, color = "Actual")) +
+  geom_line(data = future_forecasts_df, aes(x = Date, y = SVM_Forecast, color = "Future SVM Forecast")) +
+  ggtitle("Actual Data vs Future SVM Forecast") +
+  xlab("Date") +
+  ylab("Forecasted Close Price") +
+  scale_color_manual(values = c("Actual" = "black", "Future SVM Forecast" = "blue")) +
+  scale_x_date(date_labels = "%Y-%m", date_breaks = "6 months") + 
+  theme_minimal()
+```
+
+# Forecasting errors
+
+```{r}
+# Defining the forecast horizon
+h <- length(pep_test_ts_aggregated)
+
+# Generate forecasts for each model
+forecast_ar <- forecast(ar_model, h = h)
+forecast_ma <- forecast(ma_model, h = h)
+forecast_arma <- forecast(arma_model, h = h)
+forecast_arima <- forecast(arima_model, h = h)
+forecast_sarima <- forecast(sarima_model, h = h)
+forecast_ets <- forecast(ets_model, h = h)
+forecast_tbats <- forecast(tbats_model, h = h)
+forecast_local_trend <- forecast(local_trend_model, h = h)
+
+# Mean Absolute Percentage Error (MAPE)
+mape <- function(actual, forecast) {
+  mean(abs((actual - forecast) / actual), na.rm = TRUE) * 100
+}
+
+# Root Mean Squared Percentage Error (RMSPE)
+rmspe <- function(actual, forecast) {
+  sqrt(mean(((actual - forecast) / actual)^2, na.rm = TRUE)) * 100
+}
+
+# Extracting the actual values from the test dataset
+actual_values <- as.numeric(pep_test_ts_aggregated)
+
+# Forecast values for each model
+forecast_values_ar <- as.numeric(forecast_ar$mean)
+forecast_values_ma <- as.numeric(forecast_ma$mean)
+forecast_values_arma <- as.numeric(forecast_arma$mean)
+forecast_values_arima <- as.numeric(forecast_arima$mean)
+forecast_values_sarima <- as.numeric(forecast_sarima$mean)
+forecast_values_ets <- as.numeric(forecast_ets$mean)
+forecast_values_tbats <- as.numeric(forecast_tbats$mean)
+forecast_values_local_trend <- as.numeric(forecast_local_trend$mean)
+
+# Calculating MAE, RMSE, MAPE, RMSPE for each model
+errors <- data.frame(
+  Model = c("AR", "MA", "ARMA", "ARIMA", "SARIMA", "ETS", "TBATS", "Local Trend"),
+  MAE = c(
+    mean(abs(actual_values - forecast_values_ar), na.rm = TRUE),
+    mean(abs(actual_values - forecast_values_ma), na.rm = TRUE),
+    mean(abs(actual_values - forecast_values_arma), na.rm = TRUE),
+    mean(abs(actual_values - forecast_values_arima), na.rm = TRUE),
+    mean(abs(actual_values - forecast_values_sarima), na.rm = TRUE),
+    mean(abs(actual_values - forecast_values_ets), na.rm = TRUE),
+    mean(abs(actual_values - forecast_values_tbats), na.rm = TRUE),
+    mean(abs(actual_values - forecast_values_local_trend), na.rm = TRUE)
+  ),
+  RMSE = c(
+    sqrt(mean((actual_values - forecast_values_ar)^2, na.rm = TRUE)),
+    sqrt(mean((actual_values - forecast_values_ma)^2, na.rm = TRUE)),
+    sqrt(mean((actual_values - forecast_values_arma)^2, na.rm = TRUE)),
+    sqrt(mean((actual_values - forecast_values_arima)^2, na.rm = TRUE)),
+    sqrt(mean((actual_values - forecast_values_sarima)^2, na.rm = TRUE)),
+    sqrt(mean((actual_values - forecast_values_ets)^2, na.rm = TRUE)),
+    sqrt(mean((actual_values - forecast_values_tbats)^2, na.rm = TRUE)),
+    sqrt(mean((actual_values - forecast_values_local_trend)^2, na.rm = TRUE))
+  ),
+  MAPE = c(
+    mape(actual_values, forecast_values_ar),
+    mape(actual_values, forecast_values_ma),
+    mape(actual_values, forecast_values_arma),
+    mape(actual_values, forecast_values_arima),
+    mape(actual_values, forecast_values_sarima),
+    mape(actual_values, forecast_values_ets),
+    mape(actual_values, forecast_values_tbats),
+    mape(actual_values, forecast_values_local_trend)
+  ),
+  RMSPE = c(
+    rmspe(actual_values, forecast_values_ar),
+    rmspe(actual_values, forecast_values_ma),
+    rmspe(actual_values, forecast_values_arma),
+    rmspe(actual_values, forecast_values_arima),
+    rmspe(actual_values, forecast_values_sarima),
+    rmspe(actual_values, forecast_values_ets),
+    rmspe(actual_values, forecast_values_tbats),
+    rmspe(actual_values, forecast_values_local_trend)
+  )
+)
+
+# Printing the error metrics
+print(errors)
+```
+
+
+```{r, warning=FALSE}
+# Function to calculate Mean Absolute Percentage Error (MAPE)
+mape <- function(actual, forecast) {
+  mean(abs((actual - forecast) / actual), na.rm = TRUE) * 100
+}
+
+# Function to calculate Root Mean Squared Percentage Error (RMSPE)
+rmspe <- function(actual, forecast) {
+  sqrt(mean(((actual - forecast) / actual)^2, na.rm = TRUE)) * 100
+}
+
+# Actual values from the test set
+actual_values <- as.numeric(pep_test_ts_aggregated)
+
+# Forecast values from the simple average method
+forecast_values_avg <- forecasts_future$average
+
+# MAE and RMSE for Simple Average Forecast
+mae_avg <- mean(abs(actual_values - forecast_values_avg), na.rm = TRUE)
+rmse_avg <- sqrt(mean((actual_values - forecast_values_avg)^2, na.rm = TRUE))
+
+# MAPE and RMSPE for Simple Average Forecast
+mape_avg <- mape(actual_values, forecast_values_avg)
+rmspe_avg <- rmspe(actual_values, forecast_values_avg)
+
+# Printing MAE, RMSE, MAPE, and RMSPE for Simple Average Forecast
+cat("Simple Average Forecast:\n")
+cat("  MAE:", mae_avg, "\n")
+cat("  RMSE:", rmse_avg, "\n")
+cat("  MAPE:", mape_avg, "%\n")
+cat("  RMSPE:", rmspe_avg, "%\n")
+
+# Triming forecasts to match actual values length
+forecast_values_stack <- forecast_values_stack[1:length(actual_values)]
+
+# MAE and RMSE for Stacking Forecast
+mae_stack <- mean(abs(actual_values - forecast_values_stack), na.rm = TRUE)
+rmse_stack <- sqrt(mean((actual_values - forecast_values_stack)^2, na.rm = TRUE))
+
+# MAPE and RMSPE for Stacking Forecast
+mape_stack <- mape(actual_values, forecast_values_stack)
+rmspe_stack <- rmspe(actual_values, forecast_values_stack)
+
+# Printing MAE, RMSE, MAPE, and RMSPE for Stacking Forecast
+cat("\nStacking Forecast:\n")
+cat("  MAE:", mae_stack, "\n")
+cat("  RMSE:", rmse_stack, "\n")
+cat("  MAPE:", mape_stack, "%\n")
+cat("  RMSPE:", rmspe_stack, "%\n")
+```
+```{r, warning=FALSE}
+# Function to calculate the percentage of forecasts within a certain percentage range
+percent_within_threshold <- function(actual, forecast, threshold) {
+  mean(abs((actual - forecast) / actual) <= threshold, na.rm = TRUE) * 100
+}
+
+# Defining the error threshold (e.g., 5%)
+threshold <- 0.05
+
+# Calculating the percentage of forecasts within the threshold for each model
+percent_within_threshold_avg <- percent_within_threshold(actual_values, forecast_values_avg, threshold)
+percent_within_threshold_stack <- percent_within_threshold(actual_values, forecast_values_stack, threshold)
+
+# Printing the results for Simple Average Forecast
+cat("Simple Average Forecast:\n")
+cat("  Percentage within 5% threshold:", percent_within_threshold_avg, "%\n")
+
+# Printing the results for Stacking Forecast
+cat("\nStacking Forecast:\n")
+cat("  Percentage within 5% threshold:", percent_within_threshold_stack, "%\n")
+```
+
+
